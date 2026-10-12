@@ -116,11 +116,12 @@ let handle_gateway t ~wall reader writer =
         loop ())
   in
   let%bind () = loop () in
+  let user = Session_handler.username handler in
   Session_handler.disconnected handler;
   Log.Global.info
     "gateway %d: disconnected%s"
     conn
-    (Option.value_map (Session_handler.username handler) ~default:"" ~f:(sprintf " (%s)"));
+    (Option.value_map user ~default:"" ~f:(sprintf " (%s)"));
   Writer.close writer
 ;;
 
