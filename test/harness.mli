@@ -5,8 +5,12 @@ module Price := Exchange_core.Price
 
 type t
 
-(** Starts at 2026-10-13 10:00 New York time, in [phase] (default core). *)
-val create : ?phase:Equities_core.Session.Us_equities.Phase.t -> unit -> t
+(** Starts at 2026-10-13 [at] (default 10:00) New York time, in [phase] (default core). *)
+val create
+  :  ?phase:Equities_core.Session.Us_equities.Phase.t
+  -> ?at:int * int
+  -> unit
+  -> t
 
 val venue : t -> Nyse_sim.Venue.t
 val advance : t -> Time_ns.Span.t -> unit
@@ -39,3 +43,6 @@ val modify : ?user:string -> t -> cl_ord_id:int -> orig:int -> qty:int -> unit
 (** Prints and forgets everything sent since the last call: member messages prefixed by
     the user, market events prefixed by [feed]. *)
 val flush : t -> unit
+
+(** Returns and forgets everything sent since the last call, as {!flush} would print it. *)
+val drain : t -> string list

@@ -73,8 +73,10 @@ let event_to_string (e : Nyse_sim.Market_event.t) =
       (Option.value_map i.indicative_price ~default:"-" ~f:px)
 ;;
 
-let create ?(phase = Session.Us_equities.Phase.Core) () =
-  let t = { now = local 10 0; venue = Set_once.create (); out = Queue.create () } in
+let create ?(phase = Session.Us_equities.Phase.Core) ?(at = 10, 0) () =
+  let t =
+    { now = local (fst at) (snd at); venue = Set_once.create (); out = Queue.create () }
+  in
   let v =
     Venue.create
       Nyse_sim.Listing.defaults
@@ -168,4 +170,10 @@ let modify ?(user = "TRADER1") t ~cl_ord_id ~orig ~qty =
 let flush t =
   Queue.iter t.out ~f:print_endline;
   Queue.clear t.out
+;;
+
+let drain t =
+  let l = Queue.to_list t.out in
+  Queue.clear t.out;
+  l
 ;;
