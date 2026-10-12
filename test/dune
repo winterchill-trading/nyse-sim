@@ -1,0 +1,15 @@
+(library
+ (name nyse_sim_test)
+ (inline_tests
+  (flags
+   (:standard -source-tree-root .)))
+ (libraries
+  async
+  core
+  equities-core
+  exchange-core
+  exchange-core-engine
+  nyse-sim
+  nyse-sim.wire)
+ (preprocess
+  (pps ppx_jane)))
