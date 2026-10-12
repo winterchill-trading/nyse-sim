@@ -83,6 +83,9 @@ val resting : t -> symbol_id:int -> (int * Exchange_core.Side.t * Price.t * int)
 (** The current Security Status of a symbol. *)
 val status : t -> symbol_id:int -> Market_event.Status.t
 
+(** Whether the symbol is in a LULD trading pause. *)
+val halted : t -> symbol_id:int -> bool
+
 val luld_bands : t -> symbol_id:int -> Equities_core.Halts.Bands.t
 
 (** Number of live gateway orders, for tests. *)

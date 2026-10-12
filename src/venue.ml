@@ -99,6 +99,7 @@ let luld_bands t ~symbol_id =
 ;;
 
 let status t ~symbol_id = (sym t symbol_id).status
+let halted t ~symbol_id = (sym t symbol_id).halted
 
 let step_clock t =
   let n = now_ns t in
