@@ -11,6 +11,7 @@
   exchange-core-engine
   market-data
   nyse-sim
-  nyse-sim.wire)
+  nyse-sim.wire
+  price-anchor)
  (preprocess
   (pps ppx_jane)))

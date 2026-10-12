@@ -1,66 +1,49 @@
 (** Ties a listed symbol's noise traders to a reference price: the TradFi side of the
-    price-anchor design (specs/design/price-anchor.md, "TradFi simulators").
+    price-anchor design (specs/design/price-anchor.md, "TradFi simulators"), as a thin
+    wrapper over {!Price_anchor.Anchor}.
 
     NYSE has no free real-time source, so there is no depth to shadow and no trade flow to
     replay. The noise traders stay the book's only liquidity; their random walk becomes
-    mean-reverting around a reference price through
-    {!Exchange_core_engine.Market_sim.set_reference} with a half-life. The reference is a
-    series file ([time price] lines, {!Price_anchor.Source.parse_series_line}), a fixed
-    price with an optional daily drift, or a recorded crypto series scaled by a factor.
+    mean-reverting around a reference {!Price_anchor.Path.t} pulled on the venue's clock
+    ([half_life], [step_clock:false], [levels:0], [mark_interval] zero). The path is a
+    series file, a fixed price with an optional daily drift, or a recorded crypto series
+    scaled by a factor.
 
-    The anchor only pulls while the symbol trades continuously: in the core session,
-    outside the auction imbalance periods and outside LULD pauses. Otherwise the venue
-    owns the price; the anchor hands the symbol back to the free walk
-    ({!Exchange_core_engine.Market_sim.clear_reference}) and resumes at the next open
-    tick. LULD reference prices keep coming from the venue's own trades. Shadow levels and
-    trade replay are off. *)
+    The anchor only moves the price while the symbol trades continuously ({!active}): in
+    the core session, outside the auction imbalance periods and outside LULD pauses.
+    Otherwise the venue owns the price; the anchor hands the symbol back to the free walk
+    and, when it may engage again, restarts the walk from the venue's last trade (the
+    auction price). The target is kept inside the LULD bands
+    ({!Price_anchor.Clamp.within_bands}, 30 bps margin); the bands keep coming from the
+    venue's own trades. *)
 
 open! Core
 module Price := Exchange_core.Price
 module Phase := Equities_core.Session.Us_equities.Phase
 
-module Reference : sig
-  type t =
-    | Series of (Time_ns.t * Price.t) array
-    (** points in time order, at least one; the first point is applied when the anchor
-        starts and the rest follow at the same distances in venue time *)
-    | Fixed of
-        { price : Price.t
-        ; drift_bps_per_day : float (** compounded per day of venue time *)
-        }
-  [@@deriving sexp_of]
-end
-
 module Spec : sig
   type t =
     { symbol : string (** the listing, either spelling ([BRK.B] or [BRK B]) *)
-    ; reference : Reference.t
+    ; path : Price_anchor.Path.t
     ; factor : float (** simulated price = reference price * factor *)
+    ; recorded : Market_data.Instrument.t option
+    (** the recorded instrument of [-anchor-scaled]; [None] for a series or a fixed price *)
     }
   [@@deriving sexp_of]
 
-  (** Points of a series file's contents; see {!Price_anchor.Source.of_series}. *)
-  val parse_series : string -> (Time_ns.t * Price.t) array Or_error.t
+  (** [-anchor-series FILE=SYM]: reads [FILE] ({!Price_anchor.Source.of_series}). *)
+  val of_series_flag : string -> t Or_error.t Async.Deferred.t
 
-  (** [-anchor-series FILE=SYM]: reads [FILE]. *)
-  val of_series_flag : string -> t Or_error.t
-
-  (** [-anchor-fixed PRICE[,DRIFT_BPS_PER_DAY]=SYM]. *)
+  (** [-anchor-fixed PRICE[,DRIFT_BPS_PER_DAY]=SYM]
+      ({!Price_anchor.Path.fixed_of_string}). *)
   val of_fixed_flag : string -> t Or_error.t
-
-  (** A reference series from recorded data: the mid of the reference book (L2 or BBO),
-      else the last trade price, at most one point per [min_interval] (default 100ms) of
-      [recv_ts] and only when the price changed. A gap drops the book. *)
-  val points_of_source
-    :  ?min_interval:Time_ns.Span.t
-    -> Price_anchor.Source.t
-    -> (Time_ns.t * Price.t) array Async.Deferred.t
 
   (** [-anchor-scaled VENUE:SYMBOL=SYM,FACTOR]: the recorded crypto instrument's
       normalized event logs under [norm_dir] for the UTC days [[from, to_]]
-      ({!Price_anchor.Source.of_norm}), through {!points_of_source}, scaled by [FACTOR].
-      Raw minute files would need the venue's normalizer, which lives in the venue's
-      client repository; rebuild [norm/] there first ([rebuild-norm]). *)
+      ({!Price_anchor.Source.of_norm}), at most one point per 100 ms
+      ({!Price_anchor.Source.to_path}), scaled by [FACTOR]. Raw minute files would need
+      the venue's normalizer, which lives in the venue's client repository; rebuild
+      [norm/] there first ([rebuild-norm]). *)
   val of_scaled_flag
     :  string
     -> norm_dir:string
@@ -69,60 +52,46 @@ module Spec : sig
     -> t Or_error.t Async.Deferred.t
 end
 
-(** Whether the anchor pulls: core session, no imbalance period ([auction]), not halted. *)
+(** Whether the anchor may move the price: core session, no imbalance period ([auction]),
+    not halted. *)
 val active : phase:Phase.t -> halted:bool -> auction:bool -> bool
 
 type t
 
-(** [start] is the venue time the anchor starts at. [half_life] (default 1s) is the
-    mean-reversion half-life. Raises if [factor] is not positive. *)
+(** Anchors [symbol_id]'s walk in [market_sim] (which keeps [noise_traders]). [half_life]
+    (default 1s) is the mean-reversion half-life; [auction] says whether an imbalance
+    period is running. The path starts at the venue's current time. Raises if
+    [spec.factor] is not positive. *)
 val create
   :  ?half_life:Time_ns.Span.t
+  -> ?log:(Sexp.t -> unit)
   -> Spec.t
-  -> instrument:Exchange_core.Instrument.t
-  -> start:Time_ns.t
+  -> Venue.t
+  -> symbol_id:int
+  -> market_sim:Exchange_core_engine.Market_sim.t
+  -> noise_traders:int
+  -> auction:(unit -> bool)
   -> t
 
 val spec : t -> Spec.t
+val anchor : t -> Price_anchor.Anchor.t
 
-(** The scaled reference price at a venue time, rounded to the instrument's tick. *)
-val price_at : t -> Time_ns.t -> Price.t option
+(** The scaled reference price at the last {!on_venue_tick}, rounded to the tick, before
+    the LULD clamp. *)
+val price : t -> Price.t option
 
-(** Called on each noise tick before [Market_sim.tick]: pulls the symbol's walk towards
-    {!price_at} when [active], and releases it to the free walk on the first tick that is
-    not.
-
-    With [bands] (the symbol's LULD bands), the target is kept 30 bps inside them, so the
-    noise traders, whose orders reach the engine without the venue's LULD price checks, do
-    not trade through the bands. An anchor beyond a band then climbs towards it as the
-    venue moves its LULD reference with its own trades, instead of pausing the symbol. *)
-val on_tick
-  :  ?bands:Equities_core.Halts.Bands.t
-  -> t
-  -> Exchange_core_engine.Market_sim.t
-  -> active:bool
-  -> now:Time_ns.t
-  -> unit
-
-(** {!on_tick} with the venue's phase, pause state, LULD bands and clock, for the noise
-    tick of [symbol_id] (inside [Venue.with_engine]). [auction] is whether an imbalance
-    period is running. *)
-val on_venue_tick
-  :  t
-  -> Exchange_core_engine.Market_sim.t
-  -> Venue.t
-  -> symbol_id:int
-  -> auction:bool
-  -> unit
+(** Called on each noise tick inside [Venue.with_engine], before [Market_sim.tick]. *)
+val on_venue_tick : t -> unit
 
 (** Whether the walk is currently pulled towards the anchor. *)
 val engaged : t -> bool
 
 module Stats : sig
   type t =
-    { pulls : int (** ticks that pulled towards the anchor *)
-    ; waits : int (** ticks the anchor waited (not active) *)
-    ; releases : int (** hand-backs to the free walk *)
+    { pulls : int (** reference changes set on the walk ([marks_set]) *)
+    ; waits : int (** ticks the anchor waited (not {!active}) *)
+    ; releases : int (** hand-backs to the free walk ([pauses]) *)
+    ; resumes : int (** restarts from the venue's last trade after a release *)
     ; clamped : int (** pulls whose target was held inside the LULD bands *)
     }
   [@@deriving sexp_of]

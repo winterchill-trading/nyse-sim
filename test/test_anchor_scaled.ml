@@ -55,7 +55,7 @@ let%expect_test "a recorded crypto series, scaled onto AAPL" =
     A.Spec.of_scaled_flag "binance:BTCUSDT=AAPL,0.0019" ~norm_dir ~from:date ~to_:date
   in
   let spec = Or_error.ok_exn spec in
-  (match spec.reference with
+  (match spec.path with
    | Fixed _ -> ()
    | Series points ->
      Array.iter points ~f:(fun (ts, px) ->
@@ -63,14 +63,14 @@ let%expect_test "a recorded crypto series, scaled onto AAPL" =
          "+%dms %s\n"
          (Time_ns.Span.to_int_ms (Time_ns.diff ts t0))
          (Price.to_string px)));
-  let start = Time_ns.of_string_with_utc_offset "2026-10-13T14:00:00Z" in
-  let t = A.create spec ~instrument:aapl ~start in
+  let scale = Price_anchor.Scale.create ~price_factor:spec.factor aapl in
   List.iter [ 0; 250; 400 ] ~f:(fun n ->
+    let px = Price_anchor.Path.price_at spec.path ~elapsed:(Time_ns.Span.of_int_ms n) in
     printf
       "venue +%dms: %s\n"
       n
       (Price.to_string
-         (Option.value_exn (A.price_at t (Time_ns.add start (Time_ns.Span.of_int_ms n))))));
+         (Option.value_exn (Price_anchor.Scale.price scale px ~direction:Nearest))));
   [%expect
     {|
     +0ms 100000

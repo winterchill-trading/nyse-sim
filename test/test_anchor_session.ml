@@ -33,6 +33,12 @@ let market_sim v =
     (Venue.exchange v)
 ;;
 
+(* The server's wiring: the pre-market's last minutes stand in for the imbalance period. *)
+let anchor v sim spec =
+  A.create spec v ~symbol_id:1 ~market_sim:sim ~noise_traders:4 ~auction:(fun () ->
+    Phase.equal (Venue.phase v) Pre_market)
+;;
+
 type run =
   { h : H.t
   ; sim : Market_sim.t
@@ -47,12 +53,7 @@ let run r ~seconds =
   for i = 1 to seconds * 4 do
     H.advance r.h (Time_ns.Span.of_int_ms 250);
     Venue.with_engine v ~symbol_id:1 ~f:(fun _ ->
-      A.on_venue_tick
-        r.anchor
-        r.sim
-        v
-        ~symbol_id:1
-        ~auction:(Phase.equal (Venue.phase v) Pre_market);
+      A.on_venue_tick r.anchor;
       Market_sim.tick r.sim);
     if i % 4 = 0 then Venue.tick v;
     List.iter (H.drain r.h) ~f:(fun line ->
@@ -84,17 +85,16 @@ let%expect_test "waits through the pre-market auction, pulls from the open" =
   let v = H.venue h in
   let sim = market_sim v in
   let spec = A.Spec.of_fixed_flag "195=AAPL" |> Or_error.ok_exn in
-  let anchor =
-    A.create spec ~instrument:(Nyse_sim.Listing.instrument aapl) ~start:(Venue.now v)
-  in
+  let anchor = anchor v sim spec in
   let r = { h; sim; anchor; last_trade = None; executions = 0 } in
   run r ~seconds:60;
   show r "pre-market";
   [%expect
     {|
     (pre-market (phase Pre_market) (walk (189.51)) (engaged false)
-     (stats ((pulls 0) (waits 240) (releases 0) (clamped 0))) (executions 36)
-     (last_trade (189.4)) (bands ((lower 180.03) (upper 198.98))))
+     (stats ((pulls 0) (waits 240) (releases 1) (resumes 0) (clamped 0)))
+     (executions 36) (last_trade (189.4))
+     (bands ((lower 180.03) (upper 198.98))))
     |}];
   H.set_local_time h 9 30;
   Venue.set_phase v Core;
@@ -106,11 +106,13 @@ let%expect_test "waits through the pre-market auction, pulls from the open" =
   [%expect
     {|
     ("core +10s" (phase Core) (walk (195.02)) (engaged true)
-     (stats ((pulls 40) (waits 240) (releases 0) (clamped 0))) (executions 55)
-     (last_trade (195.23)) (bands ((lower 182.71) (upper 201.95))))
+     (stats ((pulls 1) (waits 240) (releases 1) (resumes 1) (clamped 0)))
+     (executions 55) (last_trade (195.23))
+     (bands ((lower 182.67) (upper 201.89))))
     ("core +60s" (phase Core) (walk (195.02)) (engaged true)
-     (stats ((pulls 240) (waits 240) (releases 0) (clamped 0))) (executions 76)
-     (last_trade (194.95)) (bands ((lower 185.33) (upper 204.83))))
+     (stats ((pulls 1) (waits 240) (releases 1) (resumes 1) (clamped 0)))
+     (executions 76) (last_trade (194.95))
+     (bands ((lower 185.33) (upper 204.83))))
     |}];
   H.set_local_time h 16 0;
   Venue.set_phase v Post_market;
@@ -120,8 +122,9 @@ let%expect_test "waits through the pre-market auction, pulls from the open" =
   [%expect
     {|
     (post-market (phase Post_market) (walk (194.79)) (engaged false)
-     (stats ((pulls 240) (waits 360) (releases 1) (clamped 0))) (executions 89)
-     (last_trade (194.55)) (bands ((lower 185.33) (upper 204.83))))
+     (stats ((pulls 1) (waits 360) (releases 2) (resumes 1) (clamped 0)))
+     (executions 89) (last_trade (194.55))
+     (bands ((lower 185.33) (upper 204.83))))
     |}]
 ;;
 
@@ -130,9 +133,7 @@ let%expect_test "an anchor beyond the LULD band climbs with the bands instead of
   let v = H.venue h in
   let sim = market_sim v in
   let spec = A.Spec.of_fixed_flag "215=AAPL" |> Or_error.ok_exn in
-  let anchor =
-    A.create spec ~instrument:(Nyse_sim.Listing.instrument aapl) ~start:(Venue.now v)
-  in
+  let anchor = anchor v sim spec in
   let r = { h; sim; anchor; last_trade = None; executions = 0 } in
   for _ = 1 to 12 do
     run r ~seconds:10;
@@ -141,40 +142,52 @@ let%expect_test "an anchor beyond the LULD band climbs with the bands instead of
   [%expect
     {|
     (trading (phase Core) (walk (198.36)) (engaged true)
-     (stats ((pulls 40) (waits 0) (releases 0) (clamped 40))) (executions 8)
-     (last_trade (197.94)) (bands ((lower 180.03) (upper 198.98))))
+     (stats ((pulls 1) (waits 0) (releases 0) (resumes 0) (clamped 1)))
+     (executions 8) (last_trade (197.94))
+     (bands ((lower 180.03) (upper 198.98))))
     (trading (phase Core) (walk (198.41)) (engaged true)
-     (stats ((pulls 80) (waits 0) (releases 0) (clamped 80))) (executions 9)
-     (last_trade (198.28)) (bands ((lower 180.03) (upper 198.98))))
+     (stats ((pulls 1) (waits 0) (releases 0) (resumes 0) (clamped 1)))
+     (executions 9) (last_trade (198.28))
+     (bands ((lower 180.03) (upper 198.98))))
     (trading (phase Core) (walk (198.32)) (engaged true)
-     (stats ((pulls 120) (waits 0) (releases 0) (clamped 120))) (executions 12)
-     (last_trade (198.24)) (bands ((lower 188.33) (upper 208.15))))
+     (stats ((pulls 1) (waits 0) (releases 0) (resumes 0) (clamped 1)))
+     (executions 12) (last_trade (198.24))
+     (bands ((lower 188.33) (upper 208.15))))
     (trading (phase Core) (walk (207.44)) (engaged true)
-     (stats ((pulls 160) (waits 0) (releases 0) (clamped 160))) (executions 31)
-     (last_trade (206.23)) (bands ((lower 188.33) (upper 208.15))))
+     (stats ((pulls 2) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 31) (last_trade (206.23))
+     (bands ((lower 188.33) (upper 208.15))))
     (trading (phase Core) (walk (207.49)) (engaged true)
-     (stats ((pulls 200) (waits 0) (releases 0) (clamped 200))) (executions 33)
-     (last_trade (207.38)) (bands ((lower 188.33) (upper 208.15))))
+     (stats ((pulls 2) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 33) (last_trade (207.38))
+     (bands ((lower 188.33) (upper 208.15))))
     (trading (phase Core) (walk (207.55)) (engaged true)
-     (stats ((pulls 240) (waits 0) (releases 0) (clamped 240))) (executions 39)
-     (last_trade (207.63)) (bands ((lower 197.25) (upper 218.01))))
+     (stats ((pulls 2) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 39) (last_trade (207.63))
+     (bands ((lower 197.25) (upper 218.01))))
     (trading (phase Core) (walk (215.04)) (engaged true)
-     (stats ((pulls 280) (waits 0) (releases 0) (clamped 240))) (executions 55)
-     (last_trade (214.82)) (bands ((lower 197.25) (upper 218.01))))
+     (stats ((pulls 3) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 55) (last_trade (214.82))
+     (bands ((lower 197.25) (upper 218.01))))
     (trading (phase Core) (walk (214.99)) (engaged true)
-     (stats ((pulls 320) (waits 0) (releases 0) (clamped 240))) (executions 58)
-     (last_trade (215.41)) (bands ((lower 197.25) (upper 218.01))))
+     (stats ((pulls 3) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 58) (last_trade (215.41))
+     (bands ((lower 197.25) (upper 218.01))))
     (trading (phase Core) (walk (215.07)) (engaged true)
-     (stats ((pulls 360) (waits 0) (releases 0) (clamped 240))) (executions 60)
-     (last_trade (214.9)) (bands ((lower 204.16) (upper 225.65))))
+     (stats ((pulls 3) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 60) (last_trade (214.9))
+     (bands ((lower 204.16) (upper 225.65))))
     (trading (phase Core) (walk (214.97)) (engaged true)
-     (stats ((pulls 400) (waits 0) (releases 0) (clamped 240))) (executions 66)
-     (last_trade (214.84)) (bands ((lower 204.16) (upper 225.65))))
+     (stats ((pulls 3) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 66) (last_trade (214.84))
+     (bands ((lower 204.16) (upper 225.65))))
     (trading (phase Core) (walk (215.03)) (engaged true)
-     (stats ((pulls 440) (waits 0) (releases 0) (clamped 240))) (executions 68)
-     (last_trade (214.9)) (bands ((lower 204.16) (upper 225.65))))
+     (stats ((pulls 3) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 68) (last_trade (214.9))
+     (bands ((lower 204.16) (upper 225.65))))
     (trading (phase Core) (walk (215.04)) (engaged true)
-     (stats ((pulls 480) (waits 0) (releases 0) (clamped 240))) (executions 73)
-     (last_trade (215.16)) (bands ((lower 204.16) (upper 225.65))))
+     (stats ((pulls 3) (waits 0) (releases 0) (resumes 0) (clamped 2)))
+     (executions 73) (last_trade (215.16))
+     (bands ((lower 204.16) (upper 225.65))))
     |}]
 ;;

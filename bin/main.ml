@@ -118,9 +118,11 @@ let command =
          | Some s -> Listing.select s |> Or_error.ok_exn
        in
        let clock = parse_clock ~clock ~start ~speed in
+       let%bind series =
+         Deferred.List.map ~how:`Sequential anchor_series ~f:Anchoring.Spec.of_series_flag
+       in
        let anchors =
-         List.map anchor_series ~f:Anchoring.Spec.of_series_flag
-         @ List.map anchor_fixed ~f:Anchoring.Spec.of_fixed_flag
+         series @ List.map anchor_fixed ~f:Anchoring.Spec.of_fixed_flag
          |> Or_error.all
          |> Or_error.ok_exn
        in
@@ -158,7 +160,7 @@ let command =
          Log.Global.info
            "anchor %s: %s, factor %g"
            a.symbol
-           (match a.reference with
+           (match a.path with
             | Fixed { price; drift_bps_per_day } ->
               sprintf
                 "fixed %s, drift %g bps/day"

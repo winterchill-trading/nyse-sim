@@ -35,7 +35,8 @@ end
 type t =
   { config : Config.t
   ; venue : Venue.t
-  ; anchors : (int, Anchoring.t) Hashtbl.t
+  ; anchor_specs : (int, Anchoring.Spec.t) Hashtbl.t
+  ; anchors : (int, Anchoring.t) Hashtbl.t (** created with the symbol's noise traders *)
   ; feed : Feed.t
   ; gateway : Gateway.t
   ; gateway_server : (Socket.Address.Inet.t, int) Tcp.Server.t
@@ -109,14 +110,14 @@ let anchor_json t ~symbol_id =
     [ ( "anchor"
       , `Assoc
           [ ( "price"
-            , Option.value_map
-                (Anchoring.price_at a (Venue.now t.venue))
-                ~default:`Null
-                ~f:(fun p -> `String (Exchange_core.Price.to_string p)) )
+            , Option.value_map (Anchoring.price a) ~default:`Null ~f:(fun p ->
+                `String (Exchange_core.Price.to_string p)) )
           ; "engaged", `Bool (Anchoring.engaged a)
           ; "pulls", `Int stats.pulls
           ; "waits", `Int stats.waits
           ; "releases", `Int stats.releases
+          ; "resumes", `Int stats.resumes
+          ; "clamped", `Int stats.clamped
           ] )
     ]
 ;;
@@ -311,19 +312,27 @@ let run_noise t =
         }
         (Venue.exchange t.venue)
     in
+    Option.iter (Hashtbl.find t.anchor_specs l.symbol_id) ~f:(fun spec ->
+      Hashtbl.set
+        t.anchors
+        ~key:l.symbol_id
+        ~data:
+          (Anchoring.create
+             ~half_life:t.config.anchor_half_life
+             ~log:(fun s -> Log.Global.info_s s)
+             spec
+             t.venue
+             ~symbol_id:l.symbol_id
+             ~market_sim:sim
+             ~noise_traders:(Market_sim.config sim).noise_traders
+             ~auction:(fun () ->
+               auction_period t.config.clock (Venue.phase t.venue) (Venue.now t.venue))));
     Clock_ns.every
       ~stop:(Ivar.read t.stopped)
       (Market_sim.config sim).tick_interval
       (fun () ->
          Venue.with_engine t.venue ~symbol_id:l.symbol_id ~f:(fun _ ->
-           Option.iter (Hashtbl.find t.anchors l.symbol_id) ~f:(fun a ->
-             let now = Venue.now t.venue in
-             Anchoring.on_venue_tick
-               a
-               sim
-               t.venue
-               ~symbol_id:l.symbol_id
-               ~auction:(auction_period t.config.clock (Venue.phase t.venue) now));
+           Option.iter (Hashtbl.find t.anchors l.symbol_id) ~f:Anchoring.on_venue_tick;
            Market_sim.tick sim)))
 ;;
 
@@ -339,23 +348,14 @@ let start (config : Config.t) =
       ~publish:(Feed.publish feed)
   in
   Gateway.set_venue gateway venue;
-  let anchors = Hashtbl.create (module Int) in
+  let anchor_specs = Hashtbl.create (module Int) in
   List.iter config.anchors ~f:(fun (spec : Anchoring.Spec.t) ->
     match
       List.find config.listings ~f:(fun (l : Listing.t) ->
         String.equal (Exchange_core.Symbol.to_string l.symbol) spec.symbol
         || String.equal l.nyse_symbol spec.symbol)
     with
-    | Some l ->
-      Hashtbl.set
-        anchors
-        ~key:l.symbol_id
-        ~data:
-          (Anchoring.create
-             ~half_life:config.anchor_half_life
-             spec
-             ~instrument:(Listing.instrument l)
-             ~start:(now ()))
+    | Some l -> Hashtbl.set anchor_specs ~key:l.symbol_id ~data:spec
     | None -> raise_s [%message "anchor: symbol is not listed" (spec.symbol : string)]);
   Feed.start feed;
   let t_ref = Set_once.create () in
@@ -380,7 +380,8 @@ let start (config : Config.t) =
   let t =
     { config
     ; venue
-    ; anchors
+    ; anchor_specs
+    ; anchors = Hashtbl.create (module Int)
     ; feed
     ; gateway
     ; gateway_server
