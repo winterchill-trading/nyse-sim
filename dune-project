@@ -34,4 +34,6 @@
   exchange-core-engine
   order-book
   equities-core
+  market-data
+  price-anchor
   ppx_jane))
