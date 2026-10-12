@@ -31,7 +31,9 @@ let command =
       "Serves Pillar Gateway binary order entry on -gateway-port, the XDP Integrated \
        Feed (packets length-framed by PktSize over TCP) on -feed-port, and the same feed \
        as JSON on ws://localhost:<http-port>/ws. The book is driven by noise traders \
-       (-noise); there is no real market data.")
+       (-noise); there is no real market data. -anchor-series and -anchor-fixed make a \
+       symbol's noise traders mean-revert towards a reference price during continuous \
+       core trading; auctions and LULD pauses keep their own price.")
     (let%map_open.Command gateway_port =
        flag "-gateway-port" (optional_with_default 4100 int) ~doc:"PORT Pillar gateway"
      and feed_port =
@@ -63,6 +65,25 @@ let command =
          "-speed"
          (optional_with_default 60. float)
          ~doc:"X accelerated clock speed, venue seconds per real second (default 60)"
+     and anchor_series =
+       flag
+         "-anchor-series"
+         (listed string)
+         ~doc:
+           "FILE=SYM anchor SYM's noise traders to a series of 'time price' lines \
+            (repeatable)"
+     and anchor_fixed =
+       flag
+         "-anchor-fixed"
+         (listed string)
+         ~doc:
+           "PRICE[,DRIFT_BPS_PER_DAY]=SYM anchor SYM's noise traders to a fixed price \
+            with an optional daily drift (repeatable)"
+     and anchor_half_life_ms =
+       flag
+         "-anchor-half-life-ms"
+         (optional_with_default 1000 int)
+         ~doc:"MS mean-reversion half-life towards the anchor (default 1000)"
      and log_level =
        flag
          "-log-level"
@@ -78,9 +99,28 @@ let command =
          | Some s -> Listing.select s |> Or_error.ok_exn
        in
        let clock = parse_clock ~clock ~start ~speed in
-       let%bind server =
-         Server.start { gateway_port; feed_port; http_port; listings; clock; noise; seed }
+       let anchors =
+         List.map anchor_series ~f:Anchoring.Spec.of_series_flag
+         @ List.map anchor_fixed ~f:Anchoring.Spec.of_fixed_flag
+         |> Or_error.all
+         |> Or_error.ok_exn
        in
+       if anchor_half_life_ms <= 0 then failwith "-anchor-half-life-ms must be positive";
+       let%bind server =
+         Server.start
+           { gateway_port
+           ; feed_port
+           ; http_port
+           ; listings
+           ; clock
+           ; noise
+           ; seed
+           ; anchors
+           ; anchor_half_life = Time_ns.Span.of_int_ms anchor_half_life_ms
+           }
+       in
+       List.iter anchors ~f:(fun a ->
+         Log.Global.info_s [%message "anchor" ~_:(a : Anchoring.Spec.t)]);
        Log.Global.info
          "nyse-sim: gateway %d, feed %d, http %d (/ws), clock %s, %d symbols%s"
          (Server.gateway_port server)
