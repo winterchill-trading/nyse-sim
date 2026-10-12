@@ -1,0 +1,8 @@
+(library
+ (name nyse_sim_wire_test)
+ (inline_tests
+  (flags
+   (:standard -source-tree-root .)))
+ (libraries core exchange-core nyse-sim.wire)
+ (preprocess
+  (pps ppx_jane)))
