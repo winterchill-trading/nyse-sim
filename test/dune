@@ -9,6 +9,7 @@
   equities-core
   exchange-core
   exchange-core-engine
+  market-data
   nyse-sim
   nyse-sim.wire)
  (preprocess
