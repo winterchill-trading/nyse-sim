@@ -1,0 +1,12 @@
+(executable
+ (name cli)
+ (public_name nyse-sim-cli)
+ (libraries
+  async
+  core
+  core_unix.command_unix
+  exchange-core
+  nyse-sim
+  nyse-sim.wire)
+ (preprocess
+  (pps ppx_jane)))
