@@ -244,8 +244,8 @@ let to_json t ~seq (m : Xdp.Msg.t) : Yojson.Safe.t =
       [ "status", chr m.security_status
       ; "halt_condition", chr m.halt_condition
       ; "ssr_state", chr m.ssr_state
-      ; "lower_band", px m.price_1
-      ; "upper_band", px m.price_2
+      ; ("lower_band", if m.price_1 = 0 then `Null else px m.price_1)
+      ; ("upper_band", if m.price_2 = 0 then `Null else px m.price_2)
       ]
     | Add_order { common = c; order_id; price; volume; side; _ }
     | Add_order_refresh { common = c; order_id; price; volume; side; _ } ->
