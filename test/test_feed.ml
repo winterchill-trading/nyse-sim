@@ -51,7 +51,13 @@ let%expect_test "channel start, events, refresh and JSON" =
        });
   Feed.publish
     feed
-    (Add { symbol_id = 1; order_id = 5; side = Buy; px = Price.of_string "189.45"; qty = 100 });
+    (Add
+       { symbol_id = 1
+       ; order_id = 5
+       ; side = Buy
+       ; px = Price.of_string "189.45"
+       ; qty = 100
+       });
   [%expect
     {|
     seq=5 flag=11 SecurityStatus AAPL status=O halt=~ ssr=~
@@ -93,7 +99,8 @@ let%expect_test "channel start, events, refresh and JSON" =
     seq=10 flag=1 heartbeat
     |}];
   List.iter (List.rev !json) ~f:print_endline;
-  [%expect {|
+  [%expect
+    {|
     {"seq":6,"type":"symbol_index_mapping","symbol":"AAPL","scale":6,"lot_size":100,"prev_close":"189.5"}
     {"seq":6,"type":"security_status","symbol":"AAPL","status":"O","halt_condition":"~","ssr_state":"~","lower_band":"0","upper_band":"0"}
     {"seq":6,"type":"symbol_index_mapping","symbol":"MSFT","scale":6,"lot_size":40,"prev_close":"420.1"}
