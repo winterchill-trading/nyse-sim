@@ -26,7 +26,12 @@ let%expect_test "resting order, then a crossing IOC from another member" =
     TRADER2: Exec sym=1 clordid=7 orderid=2 deal=1 px=189.5 qty=200 cum=200 leaves=100 liq=R
     TRADER1: Exec sym=1 clordid=1 orderid=1 deal=1 px=189.5 qty=200 cum=200 leaves=0 liq=A
     TRADER2: ModCancelAck type=11 sym=1 orderid=2 ref=7 orig=7 qty=300 leaves=0 reason=11
-    |}]
+    |}];
+  let last id = Nyse_sim.Venue.last_trade (H.venue h) ~symbol_id:id in
+  print_s
+    [%message
+      (last 1 : Exchange_core.Price.t option) (last 2 : Exchange_core.Price.t option)];
+  [%expect {| (("last 1" (189.5)) ("last 2" ())) |}]
 ;;
 
 let%expect_test "cancel, modify and cancel/replace" =

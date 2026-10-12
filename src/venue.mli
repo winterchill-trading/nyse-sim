@@ -88,5 +88,8 @@ val halted : t -> symbol_id:int -> bool
 
 val luld_bands : t -> symbol_id:int -> Equities_core.Halts.Bands.t
 
+(** The symbol's last trade price (continuous or auction), [None] before the first. *)
+val last_trade : t -> symbol_id:int -> Price.t option
+
 (** Number of live gateway orders, for tests. *)
 val live_orders : t -> int

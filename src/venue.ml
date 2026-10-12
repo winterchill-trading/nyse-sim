@@ -98,6 +98,7 @@ let luld_bands t ~symbol_id =
   Halts.luld_bands s.listing.tier ~reference:s.luld_reference ~at:(now t)
 ;;
 
+let last_trade t ~symbol_id = (sym t symbol_id).last_trade
 let status t ~symbol_id = (sym t symbol_id).status
 let halted t ~symbol_id = (sym t symbol_id).halted
 
