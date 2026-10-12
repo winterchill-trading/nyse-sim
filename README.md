@@ -20,18 +20,20 @@ summaries the codecs follow are `equities-core/docs/nyse-pillar-gateway.md` and
 
 > **There is no real market data here.** Nothing connects to NYSE and there is no free
 > real-time source for this venue. The book moves because noise traders from the engine
-> post, cancel and take around a random-walk reference price (`-noise`); a price anchor to
-> outside quotes may come later. Prices, volumes and auctions are synthetic.
+> post, cancel and take around a random-walk reference price (`-noise`), which can be
+> anchored to a reference price you choose (see [Price anchor](#price-anchor)). Prices,
+> volumes and auctions are synthetic.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `wire/` | library `nyse-sim.wire`: the codecs, usable by any client. `Le` (little-endian fields), `Stream_id`, `Order_instructions` (the 64-bit bitfield), `Pillar_app` (gateway messages), `Pillar` (session layer), `Xdp` (packets and messages), `Reason_code` |
-| `src/` | library `nyse-sim`: `Listing`, `Venue` (order lifecycle over the engine), `Market_event`, `Feed` (XDP sequencing, refresh, JSON), `Gateway` (per-user streams), `Session_handler` (one TCP session), `Framing`, `Server`, `Pillar_client` |
+| `src/` | library `nyse-sim`: `Listing`, `Venue` (order lifecycle over the engine), `Anchoring` (noise traders tied to a reference price), `Market_event`, `Feed` (XDP sequencing, refresh, JSON), `Gateway` (per-user streams), `Session_handler` (one TCP session), `Framing`, `Server`, `Pillar_client` |
 | `bin/` | `nyse-sim`, the simulator |
 | `cli/` | `nyse-sim-cli`, a client to play with it |
 | `scripts/e2e.sh` | end-to-end run (output below) |
+| `scripts/anchor-demo.sh` | anchored noise traders through the open |
 
 ## Running
 
@@ -49,10 +51,61 @@ dune exec nyse-sim -- -gateway-port 4100 -feed-port 4101 -http-port 4102 -noise
 | `-noise` | off | noise traders, 4 per symbol |
 | `-clock` | `always-open` | `always-open` (core session forever), `real` (New York wall clock and the 2026 holiday calendar), `accelerated` |
 | `-start-time`, `-speed` | `09:25`, 60 | accelerated clock: New York time on the next trading day it starts at, venue seconds per real second |
+| `-anchor-series FILE=SYM` | none | anchor a symbol to a series file (repeatable); turns noise on |
+| `-anchor-fixed PRICE[,BPS]=SYM` | none | anchor a symbol to a fixed price with an optional drift in bps per day (repeatable) |
+| `-anchor-scaled VENUE:SYMBOL=SYM,FACTOR` | none | anchor a symbol to a recorded crypto instrument times `FACTOR`, with `-anchor-norm DIR -anchor-from DATE [-anchor-to DATE]` |
+| `-anchor-half-life-ms` | 1000 | mean-reversion half-life towards the anchor |
 
 Phases follow `equities-core`'s `Session`: pre-market (early session) 04:00, core 09:30,
 post-market (late session) 16:00 to 20:00. With `-clock accelerated -start-time 09:28
 -speed 20` the opening auction runs about six seconds after start.
+
+## Price anchor
+
+There is no free real-time NYSE source, so there is no depth to shadow and no trade flow
+to replay (the crypto simulators' anchor, [price-anchor](https://github.com/winterchill-trading/price-anchor),
+does both). Here the noise traders stay the book's only liquidity, and their random walk
+becomes mean-reverting around a reference price: each noise tick the walk moves by its
+random step plus `k * (anchor - walk)` with `k = 1 - 0.5 ** (tick / half_life)`
+(`Market_sim.set_reference ~half_life`).
+
+| Reference | Flag | Notes |
+| --- | --- | --- |
+| Series file | `-anchor-series points.txt=IBM` | `time price` lines (nanoseconds or ISO 8601 with a zone; `#` comments), parsed by `Price_anchor.Source.parse_series_line`. The first point applies when the simulator starts, the others at the same distances in venue time (so the accelerated clock replays them faster) |
+| Fixed price | `-anchor-fixed 195,10=AAPL` | 195 drifting 10 bps per venue day, compounded |
+| Recorded crypto | `-anchor-scaled binance:BTCUSDT=AAPL,0.0019 -anchor-norm data/norm -anchor-from 2026-10-12` | the recorder's normalized event logs: book mid (L2 or BBO), else the last trade, at most one point per 100 ms; scaled by the factor and rounded to the cent |
+
+When the anchor pulls and when the venue owns the price:
+
+- It pulls only in continuous core trading: core session, outside the closing imbalance
+  period (15:50 on; never on the always-open clock), and not in a LULD pause.
+- In the pre-market (including the opening imbalance period), during the auctions, in the
+  post-market and while paused, the anchor waits: on the first such tick it hands the
+  symbol back to the free walk (`Market_sim.clear_reference`). It resumes on the first
+  core tick after the opening auction or the reopening.
+- LULD bands keep coming from the venue's own trades. The anchor's target is held 30 bps
+  inside the bands, because noise orders reach the engine without the venue's LULD price
+  checks. An anchor beyond a band climbs with it: trades near the band move the LULD
+  reference (every 30 s, on a 1% move) and the next band lets the walk further, about 5%
+  per 30 s, without a pause.
+- `GET /` shows each anchored symbol's anchor price, whether it is engaged, and its pull,
+  wait and release counts, next to the best bid and ask.
+
+`scripts/anchor-demo.sh` runs AAPL fixed at 195 and IBM on a +3% series from 09:28 on the
+accelerated clock (one line per real second, 60 venue seconds each):
+
+```
+Pre_market | AAPL None/189.58 anchor 195 off pulls 0 waits 5 | IBM 250.19/250.48 anchor 252.76 off pulls 0 waits 5
+Core | AAPL 189.74/189.8 anchor 195 on  pulls 1 waits 8 | IBM 250.04/250.38 anchor 253.51 on  pulls 1 waits 8
+Core | AAPL 192.83/193.08 anchor 195 on  pulls 10 waits 8 | IBM 250.04/251.38 anchor 255.02 on  pulls 10 waits 8
+Core | AAPL 194.46/194.61 anchor 195 on  pulls 31 waits 8 | IBM 256.53/257.09 anchor 258.8 on  pulls 31 waits 8
+Core | AAPL 194.71/195 anchor 195 on  pulls 47 waits 8 | IBM 257.02/258.79 anchor 259.56 on  pulls 47 waits 8
+```
+
+Limits: noise ticks run on the wall clock (250 ms), so the half-life is in real time
+while series points follow venue time; on a fast accelerated clock the walk lags the
+series. Raw minute files (`-anchor-raw`) are not read here: their normalizers live in the
+venue client repositories, so rebuild `norm/` with the venue's feed binary first.
 
 ## How to play
 
@@ -230,6 +283,9 @@ Feed lines read `seq flag message`; `AAPL/24` is the symbol and its SymbolSeqNum
 - State is in memory only; restarting the simulator starts a new day.
 - Noise traders are not market makers: spreads and depth are whatever the random flow
   leaves, and they pause while a symbol is halted.
+- Noise orders go to the engine directly, without the venue's LULD price checks; the
+  price anchor keeps its target inside the bands, but the free walk can still trade
+  through a band briefly before the limit state pauses the symbol.
 
 ## Development
 
