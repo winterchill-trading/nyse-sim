@@ -79,6 +79,25 @@ let command =
          ~doc:
            "PRICE[,DRIFT_BPS_PER_DAY]=SYM anchor SYM's noise traders to a fixed price \
             with an optional daily drift (repeatable)"
+     and anchor_scaled =
+       flag
+         "-anchor-scaled"
+         (listed string)
+         ~doc:
+           "VENUE:SYMBOL=SYM,FACTOR anchor SYM to a recorded crypto instrument's prices \
+            times FACTOR, from -anchor-norm (repeatable)"
+     and anchor_norm =
+       flag
+         "-anchor-norm"
+         (optional string)
+         ~doc:"DIR normalized event logs for -anchor-scaled (the recorder's norm/)"
+     and anchor_from =
+       flag "-anchor-from" (optional date) ~doc:"DATE first UTC day for -anchor-scaled"
+     and anchor_to =
+       flag
+         "-anchor-to"
+         (optional date)
+         ~doc:"DATE last UTC day for -anchor-scaled (default -anchor-from)"
      and anchor_half_life_ms =
        flag
          "-anchor-half-life-ms"
@@ -105,6 +124,22 @@ let command =
          |> Or_error.all
          |> Or_error.ok_exn
        in
+       let%bind scaled =
+         match anchor_scaled with
+         | [] -> return []
+         | flags ->
+           let norm_dir, from =
+             match anchor_norm, anchor_from with
+             | Some d, Some f -> d, f
+             | _ -> failwith "-anchor-scaled needs -anchor-norm and -anchor-from"
+           in
+           let to_ = Option.value anchor_to ~default:from in
+           Deferred.List.map ~how:`Sequential flags ~f:(fun flag ->
+             Anchoring.Spec.of_scaled_flag flag ~norm_dir ~from ~to_)
+           >>| Or_error.all
+           >>| Or_error.ok_exn
+       in
+       let anchors = anchors @ scaled in
        if anchor_half_life_ms <= 0 then failwith "-anchor-half-life-ms must be positive";
        let%bind server =
          Server.start
