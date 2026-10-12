@@ -97,3 +97,6 @@ val decode : Bigstring.t -> t Or_error.t
 
 (** One line per message, for the CLI and logs. *)
 val to_string_hum : t -> string
+
+(** One line for an application message. *)
+val app_to_string_hum : Pillar_app.t -> string

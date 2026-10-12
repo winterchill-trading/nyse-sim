@@ -260,7 +260,7 @@ let stream (s : Stream_id.t) =
 
 let price p = Exchange_core.Price.to_string p
 
-let app_to_string (m : Pillar_app.t) =
+let app_to_string_hum (m : Pillar_app.t) =
   match m with
   | Symbol_ref r ->
     sprintf
@@ -383,7 +383,7 @@ let to_string_hum = function
       status
       (Status.to_string status)
   | Seq_msg { stream_id; seq; payload; _ } ->
-    sprintf "%s #%d %s" (stream stream_id) seq (app_to_string payload)
+    sprintf "%s #%d %s" (stream stream_id) seq (app_to_string_hum payload)
   | Unknown { msg_type; body } ->
     sprintf "Unknown type=0x%04x len=%d" msg_type (String.length body)
 ;;
