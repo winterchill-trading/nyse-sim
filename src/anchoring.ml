@@ -83,37 +83,39 @@ module Spec = struct
     let points = Queue.create () in
     let last_at = ref None in
     let%map.Async.Deferred () =
-      Async.Pipe.iter_without_pushback source ~f:(fun (item : Price_anchor.Source.Item.t) ->
-        let price =
-          match item with
-          | Price { price; _ } -> Some price
-          | Gap _ ->
-            Ref_book.clear book;
-            None
-          | Event event ->
-            (match event with
-             | Trade trade -> last_trade := Some trade.price
-             | Bbo bbo -> Ref_book.apply_bbo book bbo
-             | L2 update -> Ref_book.apply_l2 book update
-             | Funding _ -> ());
-            Option.first_some (Ref_book.mid book) !last_trade
-        in
-        Option.iter price ~f:(fun px ->
-          let ts = Price_anchor.Source.Item.recv_ts item in
-          let due =
-            match !last_at with
-            | None -> true
-            | Some at -> Time_ns.Span.( >= ) (Time_ns.diff ts at) min_interval
+      Async.Pipe.iter_without_pushback
+        source
+        ~f:(fun (item : Price_anchor.Source.Item.t) ->
+          let price =
+            match item with
+            | Price { price; _ } -> Some price
+            | Gap _ ->
+              Ref_book.clear book;
+              None
+            | Event event ->
+              (match event with
+               | Trade trade -> last_trade := Some trade.price
+               | Bbo bbo -> Ref_book.apply_bbo book bbo
+               | L2 update -> Ref_book.apply_l2 book update
+               | Funding _ -> ());
+              Option.first_some (Ref_book.mid book) !last_trade
           in
-          let changed =
-            match Queue.last points with
-            | None -> true
-            | Some (_, p) -> not (Price.equal p px)
-          in
-          if due && changed
-          then (
-            Queue.enqueue points (ts, px);
-            last_at := Some ts)))
+          Option.iter price ~f:(fun px ->
+            let ts = Price_anchor.Source.Item.recv_ts item in
+            let due =
+              match !last_at with
+              | None -> true
+              | Some at -> Time_ns.Span.( >= ) (Time_ns.diff ts at) min_interval
+            in
+            let changed =
+              match Queue.last points with
+              | None -> true
+              | Some (_, p) -> not (Price.equal p px)
+            in
+            if due && changed
+            then (
+              Queue.enqueue points (ts, px);
+              last_at := Some ts)))
     in
     Queue.to_array points
   ;;
