@@ -154,8 +154,18 @@ let command =
            ; anchor_half_life = Time_ns.Span.of_int_ms anchor_half_life_ms
            }
        in
-       List.iter anchors ~f:(fun a ->
-         Log.Global.info_s [%message "anchor" ~_:(a : Anchoring.Spec.t)]);
+       List.iter anchors ~f:(fun (a : Anchoring.Spec.t) ->
+         Log.Global.info
+           "anchor %s: %s, factor %g"
+           a.symbol
+           (match a.reference with
+            | Fixed { price; drift_bps_per_day } ->
+              sprintf
+                "fixed %s, drift %g bps/day"
+                (Exchange_core.Price.to_string price)
+                drift_bps_per_day
+            | Series points -> sprintf "series of %d points" (Array.length points))
+           a.factor);
        Log.Global.info
          "nyse-sim: gateway %d, feed %d, http %d (/ws), clock %s, %d symbols%s"
          (Server.gateway_port server)

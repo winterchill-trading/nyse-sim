@@ -4,6 +4,12 @@
 (executable
  (name main)
  (public_name nyse-sim)
- (libraries async core core_unix.command_unix equities-core nyse-sim)
+ (libraries
+  async
+  core
+  core_unix.command_unix
+  equities-core
+  exchange-core
+  nyse-sim)
  (preprocess
   (pps ppx_jane)))
