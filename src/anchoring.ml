@@ -162,5 +162,12 @@ let on_tick t sim ~active ~now =
       t.releases <- t.releases + 1))
 ;;
 
+let on_venue_tick t sim venue ~symbol_id ~auction =
+  let active =
+    active ~phase:(Venue.phase venue) ~halted:(Venue.halted venue ~symbol_id) ~auction
+  in
+  on_tick t sim ~active ~now:(Venue.now venue)
+;;
+
 let engaged t = t.engaged
 let stats t : Stats.t = { pulls = t.pulls; waits = t.waits; releases = t.releases }

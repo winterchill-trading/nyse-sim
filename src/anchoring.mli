@@ -78,6 +78,17 @@ val on_tick
   -> now:Time_ns.t
   -> unit
 
+(** {!on_tick} with the venue's phase, pause state and clock, for the noise tick of
+    [symbol_id] (inside [Venue.with_engine]). [auction] is whether an imbalance period is
+    running. *)
+val on_venue_tick
+  :  t
+  -> Exchange_core_engine.Market_sim.t
+  -> Venue.t
+  -> symbol_id:int
+  -> auction:bool
+  -> unit
+
 (** Whether the walk is currently pulled towards the anchor. *)
 val engaged : t -> bool
 
