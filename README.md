@@ -242,6 +242,10 @@ The tests cover byte layouts and round trips of every message, the venue (lifecy
 auctions, LULD, SSR, STP, reserve, sessions), the feed, the session state machine and a
 gateway plus feed run over TCP.
 
+CI installs the pinned siblings and the opam dependencies through the shared
+[ox-setup](https://github.com/winterchill-trading/infra/blob/main/docs/ci.md) action, which
+caches the built opam switch between runs.
+
 ## License
 
 MIT
