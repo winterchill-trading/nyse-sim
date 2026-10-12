@@ -1,0 +1,9 @@
+; The main module is [main] rather than [nyse_sim] so that it does not clash with
+; the [nyse_sim] library's wrapper module.
+
+(executable
+ (name main)
+ (public_name nyse-sim)
+ (libraries async core core_unix.command_unix equities-core nyse-sim)
+ (preprocess
+  (pps ppx_jane)))
