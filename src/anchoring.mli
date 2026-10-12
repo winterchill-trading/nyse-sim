@@ -90,17 +90,23 @@ val price_at : t -> Time_ns.t -> Price.t option
 
 (** Called on each noise tick before [Market_sim.tick]: pulls the symbol's walk towards
     {!price_at} when [active], and releases it to the free walk on the first tick that is
-    not. *)
+    not.
+
+    With [bands] (the symbol's LULD bands), the target is kept 30 bps inside them, so the
+    noise traders, whose orders reach the engine without the venue's LULD price checks, do
+    not trade through the bands. An anchor beyond a band then climbs towards it as the
+    venue moves its LULD reference with its own trades, instead of pausing the symbol. *)
 val on_tick
-  :  t
+  :  ?bands:Equities_core.Halts.Bands.t
+  -> t
   -> Exchange_core_engine.Market_sim.t
   -> active:bool
   -> now:Time_ns.t
   -> unit
 
-(** {!on_tick} with the venue's phase, pause state and clock, for the noise tick of
-    [symbol_id] (inside [Venue.with_engine]). [auction] is whether an imbalance period is
-    running. *)
+(** {!on_tick} with the venue's phase, pause state, LULD bands and clock, for the noise
+    tick of [symbol_id] (inside [Venue.with_engine]). [auction] is whether an imbalance
+    period is running. *)
 val on_venue_tick
   :  t
   -> Exchange_core_engine.Market_sim.t
@@ -117,6 +123,7 @@ module Stats : sig
     { pulls : int (** ticks that pulled towards the anchor *)
     ; waits : int (** ticks the anchor waited (not active) *)
     ; releases : int (** hand-backs to the free walk *)
+    ; clamped : int (** pulls whose target was held inside the LULD bands *)
     }
   [@@deriving sexp_of]
 end

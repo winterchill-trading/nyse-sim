@@ -160,6 +160,7 @@ module Stats = struct
     { pulls : int
     ; waits : int
     ; releases : int
+    ; clamped : int
     }
   [@@deriving sexp_of]
 end
@@ -167,6 +168,7 @@ end
 type t =
   { spec : Spec.t
   ; scale : Price_anchor.Scale.t
+  ; instrument : Exchange_core.Instrument.t
   ; symbol : Exchange_core.Symbol.t
   ; half_life : Time_ns.Span.t
   ; start : Time_ns.t
@@ -175,11 +177,13 @@ type t =
   ; mutable pulls : int
   ; mutable waits : int
   ; mutable releases : int
+  ; mutable clamped : int
   }
 
 let create ?(half_life = Time_ns.Span.second) (spec : Spec.t) ~instrument ~start =
   { spec
   ; scale = Price_anchor.Scale.create ~price_factor:spec.factor instrument
+  ; instrument
   ; symbol = instrument.Exchange_core.Instrument.symbol
   ; half_life
   ; start
@@ -188,6 +192,7 @@ let create ?(half_life = Time_ns.Span.second) (spec : Spec.t) ~instrument ~start
   ; pulls = 0
   ; waits = 0
   ; releases = 0
+  ; clamped = 0
   }
 ;;
 
@@ -218,12 +223,26 @@ let price_at t now =
   Price_anchor.Scale.price t.scale (raw_price_at t now) ~direction:Nearest
 ;;
 
-let on_tick t sim ~active ~now =
+let band_margin = 0.003
+
+let within_bands t (bands : Equities_core.Halts.Bands.t) px =
+  let lo = Price.to_float bands.lower *. (1. +. band_margin) in
+  let hi = Price.to_float bands.upper *. (1. -. band_margin) in
+  let p = Price.to_float px in
+  if Float.( > ) lo hi || (Float.( >= ) p lo && Float.( <= ) p hi)
+  then px
+  else (
+    t.clamped <- t.clamped + 1;
+    Exchange_core.Instrument.round_price t.instrument (Float.clamp_exn p ~min:lo ~max:hi))
+;;
+
+let on_tick ?bands t sim ~active ~now =
   if active
   then (
     match price_at t now with
     | None -> ()
     | Some px ->
+      let px = Option.fold bands ~init:px ~f:(fun px b -> within_bands t b px) in
       Market_sim.set_reference ~half_life:t.half_life sim t.symbol px;
       t.engaged <- true;
       t.pulls <- t.pulls + 1)
@@ -240,8 +259,11 @@ let on_venue_tick t sim venue ~symbol_id ~auction =
   let active =
     active ~phase:(Venue.phase venue) ~halted:(Venue.halted venue ~symbol_id) ~auction
   in
-  on_tick t sim ~active ~now:(Venue.now venue)
+  on_tick t sim ~bands:(Venue.luld_bands venue ~symbol_id) ~active ~now:(Venue.now venue)
 ;;
 
 let engaged t = t.engaged
-let stats t : Stats.t = { pulls = t.pulls; waits = t.waits; releases = t.releases }
+
+let stats t : Stats.t =
+  { pulls = t.pulls; waits = t.waits; releases = t.releases; clamped = t.clamped }
+;;
