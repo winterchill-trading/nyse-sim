@@ -69,11 +69,18 @@ becomes mean-reverting around a reference price: each noise tick the walk moves 
 random step plus `k * (anchor - walk)` with `k = 1 - 0.5 ** (tick / half_life)`
 (`Market_sim.set_reference ~half_life`).
 
+`src/anchoring.ml` is a thin wrapper over `Price_anchor.Anchor`: one anchor per anchored
+symbol, created with that symbol's `Market_sim` and its 4 noise traders, `half_life`
+(`-anchor-half-life-ms`), `step_clock:false`, `levels:0`, `mark_interval` zero, a
+`Price_anchor.Path.t` pulled on the venue's clock, `may_engage` from the session phase,
+the imbalance periods and LULD pauses, `last_trade` from the venue, and `clamp` from the
+LULD bands (`Price_anchor.Clamp.within_bands`). Only the flag parsing lives here.
+
 | Reference | Flag | Notes |
 | --- | --- | --- |
-| Series file | `-anchor-series points.txt=IBM` | `time price` lines (nanoseconds or ISO 8601 with a zone; `#` comments), parsed by `Price_anchor.Source.parse_series_line`. The first point applies when the simulator starts, the others at the same distances in venue time (so the accelerated clock replays them faster) |
-| Fixed price | `-anchor-fixed 195,10=AAPL` | 195 drifting 10 bps per venue day, compounded |
-| Recorded crypto | `-anchor-scaled binance:BTCUSDT=AAPL,0.0019 -anchor-norm data/norm -anchor-from 2026-10-12` | the recorder's normalized event logs: book mid (L2 or BBO), else the last trade, at most one point per 100 ms; scaled by the factor and rounded to the cent |
+| Series file | `-anchor-series points.txt=IBM` | `time price` lines (nanoseconds or ISO 8601 with a zone; `#` comments), read by `Price_anchor.Source.of_series` into a `Path` (a file with points out of time order is refused). The first point applies when the simulator starts, the others at the same distances in venue time (so the accelerated clock replays them faster) |
+| Fixed price | `-anchor-fixed 195,10=AAPL` | `Price_anchor.Path.fixed_of_string`: 195 drifting 10 bps per venue day, compounded |
+| Recorded crypto | `-anchor-scaled binance:BTCUSDT=AAPL,0.0019 -anchor-norm data/norm -anchor-from 2026-10-12` | the recorder's normalized event logs through `Source.of_norm` and `Source.to_path ~min_interval:100ms`: book mid (L2 or BBO), else the last trade, the first change per 100 ms; scaled by the factor (`price_factor`) and rounded to the cent |
 
 When the anchor pulls and when the venue owns the price:
 
@@ -82,25 +89,37 @@ When the anchor pulls and when the venue owns the price:
 - In the pre-market (including the opening imbalance period), during the auctions, in the
   post-market and while paused, the anchor waits: on the first such tick it hands the
   symbol back to the free walk (`Market_sim.clear_reference`). It resumes on the first
-  core tick after the opening auction or the reopening.
+  core tick after the opening auction or the reopening, restarting the walk from the
+  venue's last trade (the auction price, when there was one) and climbing back to the
+  reference from there.
 - LULD bands keep coming from the venue's own trades. The anchor's target is held 30 bps
   inside the bands, because noise orders reach the engine without the venue's LULD price
   checks. An anchor beyond a band climbs with it: trades near the band move the LULD
   reference (every 30 s, on a 1% move) and the next band lets the walk further, about 5%
   per 30 s, without a pause.
-- `GET /` shows each anchored symbol's anchor price, whether it is engaged, and its pull,
-  wait and release counts, next to the best bid and ask.
+- `GET /` shows each anchored symbol's anchor price (the scaled reference at the last
+  tick, before the clamp), whether it is engaged, and its `pulls`, `waits`, `releases`,
+  `resumes` and `clamped` counts, next to the best bid and ask. Since the move to
+  `Price_anchor.Anchor`, `pulls` counts reference changes set on the walk (a fixed price
+  is set once per engagement, a series once per new point), not every tick; `releases`
+  counts the first wait too (an anchor started in the pre-market shows 1); `clamped`
+  counts the applied updates the bands moved.
 
 `scripts/anchor-demo.sh` runs AAPL fixed at 195 and IBM on a +3% series from 09:28 on the
 accelerated clock (one line per real second, 60 venue seconds each):
 
 ```
 Pre_market | AAPL None/189.58 anchor 195 off pulls 0 waits 5 | IBM 250.19/250.48 anchor 252.76 off pulls 0 waits 5
-Core | AAPL 189.74/189.8 anchor 195 on  pulls 1 waits 8 | IBM 250.04/250.38 anchor 253.51 on  pulls 1 waits 8
-Core | AAPL 192.83/193.08 anchor 195 on  pulls 10 waits 8 | IBM 250.04/251.38 anchor 255.02 on  pulls 10 waits 8
-Core | AAPL 194.46/194.61 anchor 195 on  pulls 31 waits 8 | IBM 256.53/257.09 anchor 258.8 on  pulls 31 waits 8
-Core | AAPL 194.71/195 anchor 195 on  pulls 47 waits 8 | IBM 257.02/258.79 anchor 259.56 on  pulls 47 waits 8
+Core | AAPL 190.64/191.46 anchor 195 on  pulls 1 waits 9 | IBM 250.04/250.46 anchor 254.27 on  pulls 2 waits 9
+Core | AAPL 192.62/192.87 anchor 195 on  pulls 1 waits 9 | IBM 252.32/252.66 anchor 255.78 on  pulls 4 waits 9
+Core | AAPL 194.38/194.77 anchor 195 on  pulls 1 waits 9 | IBM 256.44/256.53 anchor 258.8 on  pulls 8 waits 9
+Core | AAPL 194.86/194.92 anchor 195 on  pulls 1 waits 9 | IBM 257.4/257.71 anchor 259.56 on  pulls 9 waits 9
+Core | AAPL 194.96/195.15 anchor 195 on  pulls 1 waits 9 | IBM 259.38/None anchor 259.56 on  pulls 9 waits 9
 ```
+
+AAPL is within 0.2% of its anchor about 8 real seconds (8 venue minutes) after the open
+and inside a cent or two by 18 s; IBM tracks its ramp about one point behind and closes
+on 259.56 once the series ends.
 
 Limits: noise ticks run on the wall clock (250 ms), so the half-life is in real time
 while series points follow venue time; on a fast accelerated clock the walk lags the
