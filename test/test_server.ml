@@ -82,6 +82,8 @@ let%expect_test "gateway and feed over TCP" =
       ; clock = Always_open
       ; noise = false
       ; seed = 0
+      ; anchors = []
+      ; anchor_half_life = Time_ns.Span.second
       }
   in
   let%bind _, feed_reader, feed_writer =

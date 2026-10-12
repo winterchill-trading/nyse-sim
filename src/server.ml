@@ -26,6 +26,8 @@ module Config = struct
     ; clock : Clock_mode.t
     ; noise : bool
     ; seed : int
+    ; anchors : Anchoring.Spec.t list
+    ; anchor_half_life : Time_ns.Span.t
     }
   [@@deriving sexp_of]
 end
@@ -33,6 +35,7 @@ end
 type t =
   { config : Config.t
   ; venue : Venue.t
+  ; anchors : (int, Anchoring.t) Hashtbl.t
   ; feed : Feed.t
   ; gateway : Gateway.t
   ; gateway_server : (Socket.Address.Inet.t, int) Tcp.Server.t
@@ -75,6 +78,33 @@ let imbalance_kind (phase : Phase.t) now : Equities_core.Auction.Kind.t option =
   | Pre_market when m >= 9 * 60 -> Some Opening
   | Core when m >= (15 * 60) + 50 -> Some Closing
   | _ -> None
+;;
+
+(* The always-open clock has no auctions for the anchor to wait for. *)
+let auction_period (mode : Clock_mode.t) phase now =
+  match mode with
+  | Always_open -> false
+  | Real | Accelerated _ -> Option.is_some (imbalance_kind phase now)
+;;
+
+let anchor_json t ~symbol_id =
+  match Hashtbl.find t.anchors symbol_id with
+  | None -> []
+  | Some a ->
+    let stats = Anchoring.stats a in
+    [ ( "anchor"
+      , `Assoc
+          [ ( "price"
+            , Option.value_map
+                (Anchoring.price_at a (Venue.now t.venue))
+                ~default:`Null
+                ~f:(fun p -> `String (Exchange_core.Price.to_string p)) )
+          ; "engaged", `Bool (Anchoring.engaged a)
+          ; "pulls", `Int stats.pulls
+          ; "waits", `Int stats.waits
+          ; "releases", `Int stats.releases
+          ] )
+    ]
 ;;
 
 (* Gateway connections *)
@@ -196,11 +226,12 @@ let http_handler t ~body:_ _addr req =
     let symbols =
       List.map (Venue.listings t.venue) ~f:(fun (l : Listing.t) ->
         `Assoc
-          [ "symbol_id", `Int l.symbol_id
-          ; "symbol", `String l.nyse_symbol
-          ; "reference_price", `String (Exchange_core.Price.to_string l.reference_price)
-          ; "round_lot", `Int l.round_lot
-          ])
+          ([ "symbol_id", `Int l.symbol_id
+           ; "symbol", `String l.nyse_symbol
+           ; "reference_price", `String (Exchange_core.Price.to_string l.reference_price)
+           ; "round_lot", `Int l.round_lot
+           ]
+           @ anchor_json t ~symbol_id:l.symbol_id))
     in
     let%map r =
       Cohttp_async.Server.respond_string
@@ -269,6 +300,14 @@ let run_noise t =
       (Market_sim.config sim).tick_interval
       (fun () ->
          Venue.with_engine t.venue ~symbol_id:l.symbol_id ~f:(fun _ ->
+           Option.iter (Hashtbl.find t.anchors l.symbol_id) ~f:(fun a ->
+             let now = Venue.now t.venue in
+             Anchoring.on_venue_tick
+               a
+               sim
+               t.venue
+               ~symbol_id:l.symbol_id
+               ~auction:(auction_period t.config.clock (Venue.phase t.venue) now));
            Market_sim.tick sim)))
 ;;
 
@@ -284,6 +323,24 @@ let start (config : Config.t) =
       ~publish:(Feed.publish feed)
   in
   Gateway.set_venue gateway venue;
+  let anchors = Hashtbl.create (module Int) in
+  List.iter config.anchors ~f:(fun (spec : Anchoring.Spec.t) ->
+    match
+      List.find config.listings ~f:(fun (l : Listing.t) ->
+        String.equal (Exchange_core.Symbol.to_string l.symbol) spec.symbol
+        || String.equal l.nyse_symbol spec.symbol)
+    with
+    | Some l ->
+      Hashtbl.set
+        anchors
+        ~key:l.symbol_id
+        ~data:
+          (Anchoring.create
+             ~half_life:config.anchor_half_life
+             spec
+             ~instrument:(Listing.instrument l)
+             ~start:(now ()))
+    | None -> raise_s [%message "anchor: symbol is not listed" (spec.symbol : string)]);
   Feed.start feed;
   let t_ref = Set_once.create () in
   let get () = Set_once.get_exn t_ref in
@@ -307,6 +364,7 @@ let start (config : Config.t) =
   let t =
     { config
     ; venue
+    ; anchors
     ; feed
     ; gateway
     ; gateway_server
@@ -319,7 +377,8 @@ let start (config : Config.t) =
   Set_once.set_exn t_ref t;
   Venue.set_phase venue (phase_of config.clock (now ()));
   run_session_clock t now;
-  if config.noise then run_noise t;
+  (* Anchors drive the noise traders, so they turn them on. *)
+  if config.noise || not (List.is_empty config.anchors) then run_noise t;
   return t
 ;;
 

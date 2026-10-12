@@ -25,6 +25,9 @@ module Config : sig
     ; clock : Clock_mode.t
     ; noise : bool
     ; seed : int
+    ; anchors : Anchoring.Spec.t list
+    (** symbols whose noise traders follow a reference price; turns noise on *)
+    ; anchor_half_life : Time_ns.Span.t
     }
   [@@deriving sexp_of]
 end
