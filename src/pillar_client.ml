@@ -34,10 +34,18 @@ let read_raw incoming ~timeout =
      | `Eof | `Nothing_available -> None)
 ;;
 
-let rec next t ~timeout =
-  match%bind read_raw t.incoming ~timeout with
-  | Some (Stream_avail _) -> next t ~timeout
-  | r -> return r
+let next t ~timeout =
+  let deadline = Time_ns.add (Time_ns.now ()) timeout in
+  let rec loop () =
+    let timeout = Time_ns.diff deadline (Time_ns.now ()) in
+    if Time_ns.Span.(timeout <= zero)
+    then return None
+    else (
+      match%bind read_raw t.incoming ~timeout with
+      | Some (Stream_avail _) -> loop ()
+      | r -> return r)
+  in
+  loop ()
 ;;
 
 let normalise name =
