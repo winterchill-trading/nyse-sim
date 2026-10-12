@@ -87,6 +87,20 @@ let auction_period (mode : Clock_mode.t) phase now =
   | Real | Accelerated _ -> Option.is_some (imbalance_kind phase now)
 ;;
 
+let best t ~symbol_id side =
+  let prices =
+    List.filter_map (Venue.resting t.venue ~symbol_id) ~f:(fun (_, s, px, _) ->
+      Option.some_if (Exchange_core.Side.equal s side) px)
+  in
+  let best =
+    match (side : Exchange_core.Side.t) with
+    | Buy -> List.max_elt prices ~compare:Exchange_core.Price.compare
+    | Sell -> List.min_elt prices ~compare:Exchange_core.Price.compare
+  in
+  Option.value_map best ~default:`Null ~f:(fun p ->
+    `String (Exchange_core.Price.to_string p))
+;;
+
 let anchor_json t ~symbol_id =
   match Hashtbl.find t.anchors symbol_id with
   | None -> []
@@ -230,6 +244,8 @@ let http_handler t ~body:_ _addr req =
            ; "symbol", `String l.nyse_symbol
            ; "reference_price", `String (Exchange_core.Price.to_string l.reference_price)
            ; "round_lot", `Int l.round_lot
+           ; "bid", best t ~symbol_id:l.symbol_id Buy
+           ; "ask", best t ~symbol_id:l.symbol_id Sell
            ]
            @ anchor_json t ~symbol_id:l.symbol_id))
     in
