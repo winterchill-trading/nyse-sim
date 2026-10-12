@@ -47,6 +47,26 @@ module Spec : sig
 
   (** [-anchor-fixed PRICE[,DRIFT_BPS_PER_DAY]=SYM]. *)
   val of_fixed_flag : string -> t Or_error.t
+
+  (** A reference series from recorded data: the mid of the reference book (L2 or BBO),
+      else the last trade price, at most one point per [min_interval] (default 100ms) of
+      [recv_ts] and only when the price changed. A gap drops the book. *)
+  val points_of_source
+    :  ?min_interval:Time_ns.Span.t
+    -> Price_anchor.Source.t
+    -> (Time_ns.t * Price.t) array Async.Deferred.t
+
+  (** [-anchor-scaled VENUE:SYMBOL=SYM,FACTOR]: the recorded crypto instrument's
+      normalized event logs under [norm_dir] for the UTC days [[from, to_]]
+      ({!Price_anchor.Source.of_norm}), through {!points_of_source}, scaled by [FACTOR].
+      Raw minute files would need the venue's normalizer, which lives in the venue's
+      client repository; rebuild [norm/] there first ([rebuild-norm]). *)
+  val of_scaled_flag
+    :  string
+    -> norm_dir:string
+    -> from:Date.t
+    -> to_:Date.t
+    -> t Or_error.t Async.Deferred.t
 end
 
 (** Whether the anchor pulls: core session, no imbalance period ([auction]), not halted. *)

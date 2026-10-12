@@ -75,6 +75,78 @@ module Spec = struct
     then Or_error.error_s [%message "anchor price must be positive" flag]
     else Ok { symbol; reference = Fixed { price; drift_bps_per_day }; factor = 1. }
   ;;
+
+  let points_of_source ?(min_interval = Time_ns.Span.of_int_ms 100) source =
+    let module Ref_book = Price_anchor.Ref_book in
+    let book = Ref_book.create () in
+    let last_trade = ref None in
+    let points = Queue.create () in
+    let last_at = ref None in
+    let%map.Async.Deferred () =
+      Async.Pipe.iter_without_pushback source ~f:(fun (item : Price_anchor.Source.Item.t) ->
+        let price =
+          match item with
+          | Price { price; _ } -> Some price
+          | Gap _ ->
+            Ref_book.clear book;
+            None
+          | Event event ->
+            (match event with
+             | Trade trade -> last_trade := Some trade.price
+             | Bbo bbo -> Ref_book.apply_bbo book bbo
+             | L2 update -> Ref_book.apply_l2 book update
+             | Funding _ -> ());
+            Option.first_some (Ref_book.mid book) !last_trade
+        in
+        Option.iter price ~f:(fun px ->
+          let ts = Price_anchor.Source.Item.recv_ts item in
+          let due =
+            match !last_at with
+            | None -> true
+            | Some at -> Time_ns.Span.( >= ) (Time_ns.diff ts at) min_interval
+          in
+          let changed =
+            match Queue.last points with
+            | None -> true
+            | Some (_, p) -> not (Price.equal p px)
+          in
+          if due && changed
+          then (
+            Queue.enqueue points (ts, px);
+            last_at := Some ts)))
+    in
+    Queue.to_array points
+  ;;
+
+  let of_scaled_flag flag ~norm_dir ~from ~to_ =
+    let open Async in
+    match
+      let open Or_error.Let_syntax in
+      let%bind reference, right = split_target flag in
+      let%bind symbol, factor =
+        match String.lsplit2 right ~on:',' with
+        | Some (symbol, factor) ->
+          (match Float.of_string_opt factor with
+           | Some f when Float.is_finite f && Float.( > ) f 0. -> Ok (symbol, f)
+           | _ -> Or_error.error_s [%message "factor must be a positive number" flag])
+        | None -> Or_error.error_s [%message "expected VENUE:SYMBOL=SYM,FACTOR" flag]
+      in
+      let%map instrument =
+        Or_error.try_with (fun () -> Market_data.Instrument.of_string reference)
+        |> Or_error.tag ~tag:flag
+      in
+      instrument, symbol, factor
+    with
+    | Error _ as e -> return e
+    | Ok (instrument, symbol, factor) ->
+      (match%bind Price_anchor.Source.of_norm ~dir:norm_dir instrument ~from ~to_ with
+       | Error _ as e -> return (Or_error.tag e ~tag:flag)
+       | Ok source ->
+         let%map points = points_of_source source in
+         if Array.is_empty points
+         then Or_error.error_s [%message "no reference prices in the recording" flag]
+         else Ok { symbol; reference = Series points; factor })
+  ;;
 end
 
 let active ~(phase : Phase.t) ~halted ~auction =
