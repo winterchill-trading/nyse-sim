@@ -105,7 +105,10 @@ let%expect_test "bad flags" =
   in
   [%expect
     {|
-    (FILE "series: points out of time order")
+    (FILE
+     (("series file" (path FILE))
+      ("series line goes back in time" (line_number 2)
+       (line "2026-10-12T13:30:00Z 2") (previous "2026-10-12 13:30:01Z"))))
     (FILE ("no reference price in the source" "empty reference series"))
     (FILE
      (("series file" (path FILE))

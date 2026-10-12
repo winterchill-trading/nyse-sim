@@ -27,16 +27,9 @@ module Spec = struct
     match split_target flag with
     | Error _ as e -> return e
     | Ok (file, symbol) ->
+      (* [Source.of_series] refuses a file whose points go back in time. *)
       let%map path =
-        Source.of_series file
-        >>=? (fun source ->
-               (* [to_path] drops a point that goes back in time; refuse the file instead. *)
-               let%bind items = Pipe.to_list source in
-               let times = List.map items ~f:Source.Item.recv_ts in
-               if List.is_sorted times ~compare:Time_ns.compare
-               then Source.to_path (Pipe.of_list items)
-               else return (Or_error.error_string "series: points out of time order"))
-        >>| Or_error.tag ~tag:file
+        Source.of_series file >>=? Source.to_path >>| Or_error.tag ~tag:file
       in
       Or_error.map path ~f:(fun path -> { symbol; path; factor = 1.; recorded = None })
   ;;
