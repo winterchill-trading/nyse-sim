@@ -13,8 +13,10 @@
   exchange-core-engine
   fixed-decimal
   http
+  market-data
   nyse-sim.wire
   order-book
+  price-anchor
   uri
   yojson)
  (preprocess
