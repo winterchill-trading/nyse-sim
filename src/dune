@@ -1,0 +1,21 @@
+(library
+ (name nyse_sim)
+ (public_name nyse-sim)
+ (libraries
+  async
+  async_websocket
+  cohttp
+  cohttp-async
+  core
+  core_unix
+  equities-core
+  exchange-core
+  exchange-core-engine
+  fixed-decimal
+  http
+  nyse-sim.wire
+  order-book
+  uri
+  yojson)
+ (preprocess
+  (pps ppx_jane)))
