@@ -1,0 +1,6 @@
+(library
+ (name nyse_sim_wire)
+ (public_name nyse-sim.wire)
+ (libraries core exchange-core)
+ (preprocess
+  (pps ppx_jane)))
